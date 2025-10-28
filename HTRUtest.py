@@ -1,5 +1,3 @@
-# NOTE: This revision contains clean English comments and docstrings only. No functional changes.
-
 import pickle
 import numpy as np
 import torch
