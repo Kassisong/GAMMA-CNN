@@ -1,9 +1,7 @@
 
-# GAMMA-CNN (AutoCNN for Pulsar Candidate Identification)
+# GAMMA-CNN (A Genetic Algorithm–Driven Convolutional Neural Network with Multi-Modal Fusion for Pulsar Candidate Identification)
 
 This mini-package provides a **Genetic Algorithm (GA)** to search CNN structures for pulsar candidate identification on HTRU, FAST-like datasets, with optional **multi‑modal fusion** 
-
-> **Non‑breaking cleanup**: The code in `cnn_structure.py`, `gamma_cnn.py`, and `HTRUtest.py` was annotated with concise English docstrings and a few unused imports were removed. **No functionality was changed.**
 
 ---
 
