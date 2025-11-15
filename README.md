@@ -24,6 +24,25 @@ GAMMA-CNN expects a compact pickle (`.pkl`) file with aligned modalities and con
 }
 ```
 
+Note: The input dimensions of the dataset are not fixed. GAMMA-CNN supports 1D, 2D, and 3D inputs (e.g., RGB-like multi-channel images). Examples include:
+
+- "subband": (N, 3, F, F)       # 3-channel 2D image
+- "profile": (N, F, F)          # 2D profile representation
+- "dm":      (N, F)             # 1D curve
+
+As long as the array shapes are consistent within each modality, these formats are fully supported.
+
+We strongly recommend keeping the spatial resolution F consistent across all modalities. When all inputs share the same F, the model trains directly on the original resolution with no additional resizing.
+
+If different modalities have different resolutions (e.g., F vs. F'), GAMMA-CNN applies **Automatic shape alignment** during multi-modal training:
+
+- 1D arrays → resized to **64**
+- 2D arrays → resized to **64×64**
+- 3D arrays → resized to **3×64×64**
+
+This alignment unifies modality shapes for fusion, but may introduce information loss for high-resolution inputs. Users should be aware of this when preparing datasets.
+
+
 ### Modality availability
 
 GAMMA-CNN supports **any number of modalities**, from **single-modality** to **multi-modality**, depending on the dataset provided by the user.
@@ -82,9 +101,7 @@ The framework automatically detects the number of modalities based on the list l
 
 
 
-### Automatic shape alignment
-- 1D arrays → resized to **64**
-- 2D arrays → resized to **64×64**
+
 
 ---
 
