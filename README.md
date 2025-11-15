@@ -1,86 +1,163 @@
+# GAMMA-CNN
+*A Genetic Algorithm–Driven Convolutional Neural Network with Multi-Modal Fusion for Pulsar Candidate Identification*
 
-# GAMMA-CNN (A Genetic Algorithm–Driven Convolutional Neural Network with Multi-Modal Fusion for Pulsar Candidate Identification)
-
-This mini-package provides a **Genetic Algorithm (GA)** to search CNN structures for pulsar candidate identification on HTRU, FAST-like datasets, with optional **multi‑modal fusion** 
+This mini-package provides a **Genetic Algorithm (GA)** to automatically search CNN architectures for pulsar candidate identification on HTRU, FAST-like datasets, with optional **multi‑modal fusion** (flexible modality combinations, early/mid/late fusion, add/concat/attention).
 
 ---
 
-## 1) Dataset format & preprocessing
+# 1) Dataset Format & Preprocessing
 
-The preprocessing can be adapted to different datasets, as long as all input modalities are aligned and have consistent dimensions.
-Below is the expected structure of a compact pickle (`.pkl`) file used by `HTRUtest.py`:
+GAMMA-CNN expects a compact pickle (`.pkl`) file with aligned modalities and consistent dimensions:
 
-```python
+```
 {
-  "train": {  # each key -> ndarray
-    "profile": (N_train, feature_size),         # 1D pulse profile
-    "dm":      (N_train, feature_size),         # 1D DM curve
-    "subband": (N_train, feature_size, feature_size),     # 2D sub-band image
-    "subint":  (N_train, feature_size, feature_size),     # 2D sub-integration image
-    "pdm":     (N_train, feature_size, feature_size),     # 2D period-DM (optional here)
-    "diag":    (N_train, feature_size, feature_size),     # 2D diagnostic (optional here)
-    "label":   (N_train,)             # int labels {0,1} (RFI=0, Pulsar=1)
+  "train": {
+    "profile": (N, F),
+    "dm":      (N, F),
+    "subband": (N, F, F),
+    "subint":  (N, F, F),
+    "pdm":     (N, F, F),
+    "diag":    (N, F, F),
+    "label":   (N,)
   },
-  "test": { ... same keys/shapes for test split ... }
+  "test": { ... }
 }
 ```
 
-**Normalization**: arrays should be `float32` and normalized to a comparable range (e.g., `[0,1]`).
+### Modality availability  
+GAMMA-CNN handles modality availability at the **dataset level**.  
+If one modality is missing (e.g., DM curve), users simply supply:
 
-If you feed **multi‑modal inputs** directly through `AutoCNN` (`fusion=True`), inconsistent shapes are supported: 1D streams are resized to length **64** and 2D streams to **64×64** using linear interpolation (pandas).
+```
+x_train_multi = [profile, subband, subint]
+```
+
+GAMMA-CNN automatically builds a **three-stream network**.  
+**No placeholder, dummy tensor, or mask is required.**
+
+Sample-level missing values are addressed during preprocessing like standard pulsar pipelines.
+
+### Automatic shape alignment
+- 1D arrays → resized to **64**
+- 2D arrays → resized to **64×64**
 
 ---
 
-## 2) Quick start (HTRUtest)
+# 2) Quick Start
 
-1. Place your dataset pickle in the working directory (or adjust the path in `HTRUtest.py`).
-2. Run:
-
-```bash
+```
 python HTRUtest.py
 ```
 
-What it does:
-- loads the pickle,
-- builds a **4‑stream** dataset (`profile`, `dm`, `subband`, `subint`),
-- initializes `AutoCNN` with **fusion enabled** (`late + attention` by default),
-- runs GA search and writes an Excel log with **two sheets**: `population` and `children`.
-
-> Tip: On Apple Silicon, the script uses `mps` if CUDA is unavailable.
+This loads the dataset, builds multi-modal inputs, initializes AutoCNN, runs GA search, and produces Excel logs.
 
 ---
 
-## 3) GA / Model hyperparameters (`gan_mm_12d_cuda.AutoCNN`)
+# 3) GA / Model Hyperparameters (`AutoCNN`)
 
-| Parameter | Type | Typical Range(recommend) | Meaning |
-|---|---:|---:|---|
-| `population_size` | int | 5–50 | Individuals per generation. Uniqueness check auto‑enabled when ≤20. |
-| `maximal_generation_number` | int | 1–50 | Number of GA iterations. |
-| `epoch_number` | int | 5–30 | Training epochs per individual. |
-| `batch_size` | int | 4–256 | Mini‑batch size. |
-| `optimizer_fn` | callable | — | Optimizer factory (default: Adam). |
-| `loss_type` | str | `bce` / `ce` / `weighted` / `focal` | Loss selection. `bce` → 1 logit; `ce` → C logits. |
-| `class_weight` | list[float] | e.g. `[1.0, 20.0]` | For `weighted` CE or `bce` (`pos_weight = w1/w0`). |
-| **`crossover_probability`** | float | **[0.0, 1.0]** (default **0.9**) | Probability to perform crossover when creating offsprings. |
-| **`mutation_probability`** | float | **[0.0, 1.0]** (default **0.2**) | Probability to mutate an offspring. |
-| `mutation_operation_distribution` | tuple[float] | sums to 1 | Weights for mutation ops: `('add_skip','add_pooling','remove','change')`. |
-| `fitness_cache` | str | path | JSON file storing evaluated metrics. |
-| `logs_dir` / `checkpoint_dir` | str | paths | Where logs and checkpoints are stored. |
-| `device` | str | `"cuda"` / `"mps"` / `"cpu"` | Compute device string. |
+## Full Parameter Table (with Required / Recommended / Default)
 
-### Fusion controls
-| Parameter | Type | Values | Effect |
-|---|---:|---|---|
-| `fusion` | bool | `True/False` | Enable multi‑modal fusion (needs ≥2 streams). |
-| `fusion_pos` | str | `early` / `mid` / `late` / `all` | Where to fuse (`all` randomly picks one at build time). |
-| `fusion_type` | str | `add` / `concat` / `attention` / `mix` | How to fuse (`mix` randomly picks one at build time). |
-| `num_streams` | int or `None` | — | If `None`, inferred from `x_train_multi` length or channel count. |
-
-**Inheritance rule**: in fusion mode, each child **inherits** one parent's **(`fusion_pos`, `fusion_type`)** to keep a consistent modality design.
+| Parameter | Required? | Recommended Range | Default | Meaning |
+|----------|-----------|-------------------|---------|---------|
+| population_size | **Yes** | 5–50 | — | Individuals per generation |
+| maximal_generation_number | **Yes** | 1–50 | — | Number of GA iterations |
+| dataset | **Yes** | — | — | Multi-modal dataset dict |
+| output_head_builder | No | — | None | Custom head builder |
+| epoch_number | No | 5–30 | 1 | Epochs per individual |
+| optimizer_fn | No | Adam/Sgd | None→Adam | Optimizer factory |
+| crossover_probability | No | 0.5–1.0 | 0.9 | Crossover chance |
+| mutation_probability | No | 0.1–0.4 | 0.2 | Mutation chance |
+| mutation_operation_distribution | No | — | None | Mutation weights |
+| fitness_cache | No | — | "fitness.json" | Cache file |
+| logs_dir | No | — | "./logs/train_data" | Log directory |
+| checkpoint_dir | No | — | "./checkpoints" | Checkpoints |
+| device | No | cuda/mps/cpu | "cpu" | Compute device |
+| loss_type | No | bce/ce/weighted/focal | "ce" | Loss function |
+| class_weight | No | [1.0, w] | None | For weighted loss |
+| batch_size | No | 4–256 | 32 | Batch size |
+| fusion | No | True/False | False | Enable fusion |
+| fusion_pos | No | early/mid/late/all | "early" | Fusion position |
+| fusion_type | No | add/concat/attention/mix | "add" | Fusion method |
+| num_streams | No | auto | None | # of streams |
+| seed | No | — | 42 | Random seed |
+| logger_path | No | — | "ga_stats.json" | Stats output |
 
 ---
 
-## 4) Minimal usage example
+# 3.1 Fusion Details (per reviewer request)
+
+### Supported fusion positions (`fusion_pos`)
+- early
+- mid
+- late
+- all → random choice at build time
+
+### Supported fusion types (`fusion_type`)
+- add  
+- concat → **with automatic 1×1 convolution for channel compression**  
+- attention → normalized over modality axis  
+- mix → random type at build time
+
+### Attention fusion specifics
+- **Normalization axis:** modality dimension (`dim=0`)  
+- **Temperature:** τ = **1** (standard softmax)
+
+---
+
+# 3.2 Example pseudocode for flexible modality subsets
+
+```
+inputs = load_available_modalities()      # e.g., 3 or 4 modalities
+aligned = [resize_and_norm(x) for x in inputs]
+features = [stem_block(x) for x in aligned]
+
+if fusion_pos == "early":
+    fused = fuse(features)
+elif fusion_pos == "mid":
+    fused = mid_level_fusion(features)
+elif fusion_pos == "late":
+    fused = late_fusion(features)
+
+output = classifier(fused)
+```
+
+---
+
+# 4) Minimal Usage Example
+
+### **Single-Modality Example (Subband Only)**
+
+```python
+from gan_mm_12d_cuda import AutoCNN
+import torch
+
+dataset_subband = {
+    "x_train": train_sb,   # shape: (N, 64, 64)
+    "y_train": train_y,
+    "x_test":  test_sb,
+    "y_test":  test_y,
+}
+
+device = "cuda" if torch.cuda.is_available() else \
+         ("mps" if torch.backends.mps.is_available() else "cpu")
+
+ga = AutoCNN(
+    population_size=10,
+    maximal_generation_number=10,
+    dataset=dataset_subband,
+    epoch_number=10,
+    batch_size=64,
+    fusion=False,      # single-modality → fusion disabled
+    device=device,
+)
+
+best = ga.run("single_subband_log.xlsx")
+print("Best:", best)
+```
+
+
+
+### **Multi-Modal Example (Profile + DM + Subband + Subintegration)**
 
 ```python
 from gan_mm_12d_cuda import AutoCNN
@@ -93,7 +170,8 @@ dataset_multi = {
     "y_test": test_y,
 }
 
-device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+device = "cuda" if torch.cuda.is_available() else \
+         ("mps" if torch.backends.mps.is_available() else "cpu")
 
 ga = AutoCNN(
     population_size=20,
@@ -106,25 +184,25 @@ ga = AutoCNN(
     fusion=True,
     fusion_pos="late",
     fusion_type="attention",
-    crossover_probability=0.9,
-    mutation_probability=0.2,
 )
 
-best = ga.run("evolution_log.xlsx")
+best = ga.run("multi_modal_log.xlsx")
 print("Best:", best, getattr(best, "_fusion_choice", None))
 ```
 
 ---
 
-## 5) Outputs
-
-- **Checkpoints**: best weights per individual under `./checkpoints/model_<hash>/model_<hash>.pt`.
-- **Fitness cache**: the JSON file configured by `fitness_cache` accumulates metrics across runs.
+# 5) Outputs
+- Checkpoints under `./checkpoints/model_<hash>/`
+- Cached metrics in `fitness_cache`
 
 ---
 
-## 6) Notes
+# 6) Notes
+- GA search is compute-heavy; use few epochs during search.
+- BCE produces single-logit output with threshold 0.5.
+- Inconsistent modality shapes are auto-aligned.
 
-- GA search is compute‑heavy; use small epochs during search and re‑train your **best** structure longer afterwards.
-- With `loss_type="bce"`, a single logit is emitted; metrics use a default 0.5 threshold.
-- On inconsistent modality sizes, the code automatically resizes 1D to `(64)` and 2D to `64×64` using linear interpolation.
+---
+
+This README incorporates all reviewer-requested clarifications.
