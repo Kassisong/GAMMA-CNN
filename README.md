@@ -30,7 +30,7 @@ Note: The input dimensions of the dataset are not fixed. GAMMA-CNN supports 1D, 
 - "profile": (N, F, F)          # 2D profile representation
 - "dm":      (N, F)             # 1D curve
 
-As long as the array shapes are consistent within each modality, these formats are fully supported.
+As long as the array shapes are consistent within each modality, these formats are supported.
 
 We strongly recommend keeping the spatial resolution F consistent across all modalities. When all inputs share the same F, the model trains directly on the original resolution with no additional resizing.
 
