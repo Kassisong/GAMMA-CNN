@@ -24,18 +24,63 @@ GAMMA-CNN expects a compact pickle (`.pkl`) file with aligned modalities and con
 }
 ```
 
-### Modality availability  
-GAMMA-CNN handles modality availability at the **dataset level**.  
-If one modality is missing (e.g., DM curve), users simply supply:
+### Modality availability
+
+GAMMA-CNN supports **any number of modalities**, from **single-modality** to **multi-modality**, depending on the dataset provided by the user.
+
+#### Single-modality example (subband only)
+
+If the dataset contains only one modality (e.g., subband), users provide:
 
 ```
-x_train_multi = [profile, subband, subint]
+dataset_subband = {
+"x_train": train_sb,
+"y_train": train_y,
+"x_test": test_sb,
+"y_test": test_y,
+}
+```
+The system automatically builds a **single-stream CNN** (fusion disabled).
+
+---
+
+#### Multi-modal example (4 modalities)
+
+If four modalities are available (profile, DM curve, subband, subintegration), users provide:
+
+```
+dataset_multi = {
+"x_train_multi": [train_profile, train_dm, train_sb, train_si],
+"y_train": train_y,
+"x_test_multi": [test_profile, test_dm, test_sb, test_si],
+"y_test": test_y,
+}
 ```
 
-GAMMA-CNN automatically builds a **three-stream network**.  
-**No placeholder, dummy tensor, or mask is required.**
+GAMMA-CNN automatically constructs a **four-stream network** and applies fusion when `fusion=True`.
 
-Sample-level missing values are addressed during preprocessing like standard pulsar pipelines.
+---
+
+#### Flexible subsets of modalities
+
+GAMMA-CNN also supports **arbitrary subsets** of the available modalities. For example:
+
+Two-modal fusion:
+```
+x_train_multi = [train_sb, train_si]
+```
+→ system builds a **two-stream network**
+
+Three-modal fusion:
+
+```
+x_train_multi = [train_profile, train_sb, train_si]
+```
+→ system builds a **three-stream network**
+
+The framework automatically detects the number of modalities based on the list length, aligns their dimensions, and constructs the corresponding multi-stream architecture — **no placeholder or mask is required**.
+
+
 
 ### Automatic shape alignment
 - 1D arrays → resized to **64**
