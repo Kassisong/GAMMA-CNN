@@ -111,7 +111,7 @@ The framework automatically detects the number of modalities based on the list l
 python HTRUtest.py
 ```
 
-This loads the dataset, builds multi-modal inputs, initializes AutoCNN, runs GA search, and produces Excel logs.
+This loads the dataset, builds multi-modal inputs, initializes AutoCNN, runs GA search, and produces related logs.
 
 ---
 
@@ -123,30 +123,26 @@ This loads the dataset, builds multi-modal inputs, initializes AutoCNN, runs GA 
 |----------|-----------|-------------------|---------|---------|
 | population_size | **Yes** | 5–50 | — | Individuals per generation |
 | maximal_generation_number | **Yes** | 1–50 | — | Number of GA iterations |
-| dataset | **Yes** | — | — | Multi-modal dataset dict |
-| output_head_builder | No | — | None | Custom head builder |
-| epoch_number | No | 5–30 | 1 | Epochs per individual |
+| dataset | **Yes** | — | — | Single/Multi-modal dataset dict |
+| epoch_number | Recommended | 5–30 | 1 | Epochs per individual |
 | optimizer_fn | No | Adam/Sgd | None→Adam | Optimizer factory |
 | crossover_probability | No | 0.5–1.0 | 0.9 | Crossover chance |
 | mutation_probability | No | 0.1–0.4 | 0.2 | Mutation chance |
-| mutation_operation_distribution | No | — | None | Mutation weights |
 | fitness_cache | No | — | "fitness.json" | Cache file |
-| logs_dir | No | — | "./logs/train_data" | Log directory |
 | checkpoint_dir | No | — | "./checkpoints" | Checkpoints |
 | device | No | cuda/mps/cpu | "cpu" | Compute device |
-| loss_type | No | bce/ce/weighted/focal | "ce" | Loss function |
+| loss_type | Recommended | bce/ce/weighted/focal | "bce" | Loss function |
 | class_weight | No | [1.0, w] | None | For weighted loss |
-| batch_size | No | 4–256 | 32 | Batch size |
-| fusion | No | True/False | False | Enable fusion |
-| fusion_pos | No | early/mid/late/all | "early" | Fusion position |
-| fusion_type | No | add/concat/attention/mix | "add" | Fusion method |
-| num_streams | No | auto | None | # of streams |
+| batch_size | Recommended | 4–256 | 32 | Batch size |
+| fusion | Recommended | True/False | False | Enable fusion |
+| fusion_pos | No | early/mid/late/all | "early" | Fusion position (only works when fusion=True) |
+| fusion_type | No | add/concat/attention/mix | "add" | Fusion method (only works when fusion=True)|
 | seed | No | — | 42 | Random seed |
 | logger_path | No | — | "ga_stats.json" | Stats output |
 
 ---
 
-# 3.1 Fusion Details (per reviewer request)
+# 3.1 Fusion Details
 
 ### Supported fusion positions (`fusion_pos`)
 - early
@@ -213,7 +209,7 @@ ga = AutoCNN(
     device=device,
 )
 
-best = ga.run("single_subband_log.xlsx")
+best = ga.run()
 print("Best:", best)
 ```
 
@@ -244,11 +240,12 @@ ga = AutoCNN(
     device=device,
     loss_type="bce",
     fusion=True,
-    fusion_pos="late",
-    fusion_type="attention",
+    fusion_pos="late",        # "early" / "mid" / "late"/"all"
+    fusion_type="attention",  # "add" / "concat" / "attention"/"mix"
+    device=device,
 )
 
-best = ga.run("multi_modal_log.xlsx")
+best = ga.run()
 print("Best:", best, getattr(best, "_fusion_choice", None))
 ```
 
@@ -257,14 +254,6 @@ print("Best:", best, getattr(best, "_fusion_choice", None))
 # 5) Outputs
 - Checkpoints under `./checkpoints/model_<hash>/`
 - Cached metrics in `fitness_cache`
+- Logger in `ga_stats`
 
 ---
-
-# 6) Notes
-- GA search is compute-heavy; use few epochs during search.
-- BCE produces single-logit output with threshold 0.5.
-- Inconsistent modality shapes are auto-aligned.
-
----
-
-This README incorporates all reviewer-requested clarifications.
