@@ -1,8 +1,6 @@
-# NOTE: This revision adds concise English docstrings/comments only. No functional changes.
-
 import os
 from abc import ABC, abstractmethod
-from typing import Iterable, Callable, Union, Sequence, Dict, Any, Tuple, List, Optional
+from typing import Iterable, Callable, Union, Sequence, Dict, Any, Tuple, List, Optional, Union
 
 import numpy as np
 import torch
@@ -10,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
-from torch.cuda.amp import autocast, GradScaler
+import pandas as pd
 
 # -------------------------
 # Layer descriptors (not nn.Module)
@@ -21,9 +19,7 @@ class Layer(ABC):
         ...
 
 class FocalLoss(nn.Module):
-    """ Standard focal loss for multi-class classification using CrossEntropy as base. """
     def __init__(self, alpha=1.0, gamma=2.0, reduction="mean"):
-        """ Initialize CNN wrapper. Handles optional multi-stream fusion. Args: input_shape (C,H,W), output_head_builder, layers, optimizer_fn, loss_type, class_weight, fusion flags. """
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -31,7 +27,6 @@ class FocalLoss(nn.Module):
         self.ce = nn.CrossEntropyLoss(reduction="none")
 
     def forward(self, logits, targets):
-        """ Forward pass with or without fusion (early/mid/late). Returns raw logits (no activation). """
         ce_loss = self.ce(logits, targets)
         pt = torch.exp(-ce_loss)
         loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
@@ -42,8 +37,8 @@ class FocalLoss(nn.Module):
         else:
             return loss
 
+
 class SkipLayer(Layer):
-    """ Descriptor for a residual block with two conv stages (feature_size1feature_size2). """
     GROUP_NUMBER = 1
 
     def __init__(self,
@@ -78,10 +73,10 @@ class _MLPBlock(nn.Module):
             x = x.view(x.size(0), -1)
         return self.net(x)
 
+
 class PoolingLayer(Layer):
-    """ Descriptor for a pooling operation (max). """
     def __init__(self, pooling_type: str, kernel: Tuple[int, int] = (2, 2), stride: Tuple[int, int] = (2, 2)):
-        assert pooling_type in ("max")
+        assert pooling_type in ("max", "mean")
         self.pooling_type = pooling_type
         self.kernel = kernel
         self.stride = stride
@@ -90,7 +85,6 @@ class PoolingLayer(Layer):
         return self.pooling_type
 
 class _SkipBlock(nn.Module):
-    """ Residual block implementation used for SkipLayer descriptors. """
     def __init__(self, in_ch, f1, f2, kernel=(3,3), stride=(1,1), padding_mode="same", p_drop=0.2):
         super().__init__()
         padding = "same" if padding_mode == "same" else 0
@@ -114,7 +108,6 @@ class _SkipBlock(nn.Module):
         return out
 
 class _Pooling(nn.Module):
-    """ Wrapper over pooling op used for PoolingLayer descriptors. """
     def __init__(self, pooling_type: str, kernel: Tuple[int, int], stride: Tuple[int, int]):
         super().__init__()
         self.pool = nn.MaxPool2d(kernel_size=kernel, stride=stride)
@@ -145,7 +138,7 @@ class _AttentionFuse(nn.Module):
         return out
 
 def _resize_to_match(t: torch.Tensor, target_hw: Tuple[int, int]) -> torch.Tensor:
-    """ resize  target_hw=(H,W) batch  channel """
+    """ resize  target_hw=(H,W)， batch  channel """
     if t.ndim == 2:  # (N, L)
         t = t.unsqueeze(1).unsqueeze(2)  # -> (N,1,1,L)
     if t.ndim == 3:  # (N,C,H)
@@ -179,7 +172,6 @@ def _fuse_concat(xs: List[torch.Tensor], dim: int = 1) -> torch.Tensor:
 # CNN wrapper (builds feature extractor + output head) with optional multi-scale fusion
 # -------------------------
 class CNN(nn.Module):
-    """ High-level CNN/MLP wrapper that supports early/mid/late fusion across multiple streams. """
     def __init__(self,
                  input_shape: Sequence[int],
                  output_head_builder: Callable[[Tuple[int, int, int]], nn.Module],
@@ -202,14 +194,16 @@ class CNN(nn.Module):
         self.load_if_exist = load_if_exist
         self.logs_dir = logs_dir
         self.checkpoint_dir = checkpoint_dir
-
+        self.loss_type = loss_type
+        self.class_weight = class_weight
+        
         # Fusion config
         self.fusion = fusion and (num_streams > 1)
         self.fusion_pos = fusion_pos
         self.fusion_type = fusion_type
         self.num_streams = num_streams
 
-        # ---- Lock fusion choice at construction time ----
+                # ---- Lock fusion choice at construction time ----
         self._chosen_pos = None
         self._chosen_ftype = None
         if self.fusion:
@@ -271,7 +265,7 @@ class CNN(nn.Module):
         self,
         in_ch: int,
         layer_slice: Sequence[Layer],
-        hw: Tuple[int, int] = None,   #   (H, W)
+        hw: Tuple[int, int] = None,   # ← ： (H, W)
     ) -> Tuple[nn.Module, Tuple[int,int,int]]:
         modules: List[nn.Module] = []
         c = in_ch
@@ -283,11 +277,9 @@ class CNN(nn.Module):
                 c = desc.feature_size2
             elif isinstance(desc, PoolingLayer):
                 modules.append(_Pooling(desc.pooling_type, desc.kernel, desc.stride))
-            else:
-                raise ValueError(f"Unknown layer descriptor: {desc}")
         seq = nn.Sequential(*modules) if modules else nn.Identity()
 
-        # ---  hw ---
+        # --- ： hw， ---
         with torch.no_grad():
             try:
                 device = next(self.parameters()).device
@@ -299,6 +291,7 @@ class CNN(nn.Module):
             out = seq(dummy)
         return seq, (out.shape[1], out.shape[2], out.shape[3])
 
+
     def _choose_fusion_type(self) -> str:
         if self.fusion_type == "mix":
             return np.random.choice(["add", "concat", "attention"])  # simple random
@@ -306,13 +299,12 @@ class CNN(nn.Module):
 
     # ---- building ----
     def _build_single_stream(self):
-        """ Build the single-branch CNN pipeline (no fusion). """
         # original single pipeline
         self.features, feat_shape = self._build_seq(self.input_shape[0], self.layers)
         self.classifier = self.output_head_builder(feat_shape)
 
     def _build_with_fusion(self):
-        """1D/2D MLP  CNN """
+        """（1D/2D） MLP  CNN """
         pos, ftype = self._chosen_pos, self._chosen_ftype
 
         # 
@@ -320,7 +312,7 @@ class CNN(nn.Module):
             #  input_shape 
             self.input_shapes = [self.input_shape] * self.num_streams
 
-        # True=image, False=vector
+        # （True=image, False=vector）
         self.is_image_streams = []
         for shape in self.input_shapes:
             if len(shape) == 3 and shape[1] > 1 and shape[2] > 1:
@@ -338,7 +330,7 @@ class CNN(nn.Module):
                 self.features, feat_shape = self._build_seq(in_ch, self.layers)
                 self.classifier = self.output_head_builder(feat_shape)
             else:
-                # 
+                # （）
                 input_dim = sum([s[0] for s, isimg in zip(self.input_shapes, self.is_image_streams) if not isimg])
                 self.features = _MLPBlock(input_dim, hidden_dim=128, output_dim=64)
                 self.classifier = nn.Sequential(nn.Linear(64, 1))
@@ -364,17 +356,22 @@ class CNN(nn.Module):
 
             self.branches = nn.ModuleList(heads)
 
-            # tail 
+            # === ： mid fusion  ===
+            min_h = min(s[1] for s in out_shapes)
+            min_w = min(s[2] for s in out_shapes)
+
             c_tail_in = out_shapes[0][0] * (self.num_streams if ftype == "concat" else 1)
-            if self.is_image_streams.count(True) > 0:
-                h_head, w_head = out_shapes[0][1], out_shapes[0][2]
-                self.features, feat_shape = self._build_seq(c_tail_in, tail_desc, hw=(h_head, w_head))
-                self.classifier = self.output_head_builder(feat_shape)
-            else:
-                self.features = _MLPBlock(c_tail_in, hidden_dim=128, output_dim=64)
-                self.classifier = nn.Sequential(nn.Linear(64, 1))
+
+            # tail build 
+            self.features, feat_shape = self._build_seq(
+                c_tail_in, tail_desc, hw=(min_h, min_w)
+            )
+
+            self.classifier = self.output_head_builder(feat_shape)
+
             if ftype == "attention":
                 self.att_fuser = _AttentionFuse(self.num_streams)
+
 
         # ===== Late Fusion =====
         elif pos == "late":
@@ -413,11 +410,17 @@ class CNN(nn.Module):
         else:
             raise ValueError(f"Unknown fusion_pos: {self.fusion_pos}")
 
-        # 
+        # ----  fusion  ----
+        #  "mix"， add/concat/attention
+        if ftype not in ("add", "concat", "attention"):
+            ftype = "attention"
         self._fusion_choice = (pos, ftype)
 
+        #  attention  fuser，
+        if ftype == "attention" and self.att_fuser is None:
+            self.att_fuser = _AttentionFuse(self.num_streams)
+
     def _build_from_descriptors(self):
-        """ Dispatch builder depending on fusion settings and mark model as built. """
         if not self.fusion:
             self._build_single_stream()
         else:
@@ -434,7 +437,6 @@ class CNN(nn.Module):
     # ---- training / eval helpers ----
     def _prepare_inputs(self, data_x: Union[np.ndarray, torch.Tensor, List[Union[np.ndarray, torch.Tensor]]], device: str):
         """Accepts either (N,C,H,W)/(N,H,W) tensor/ndarray, or a list of K such arrays for multi-stream.
-        NOTE:  device cuda  DataLoader  batch  device
         Returns: list_of_tensors if fusion, else single tensor.
         """
         def to_four_d(a):
@@ -445,26 +447,25 @@ class CNN(nn.Module):
 
         if self.fusion:
             if isinstance(data_x, (list, tuple)):
-                xs = [to_four_d(xx) for xx in data_x]
+                xs = [to_four_d(xx).to(device) for xx in data_x]
             else:
                 # if packed as (N, K, H, W), split along channel 1 if C==K and original C==1
                 x = to_four_d(data_x)
                 if x.shape[1] == self.num_streams:
-                    xs = [x[:, i:i+1, ...] for i in range(self.num_streams)]
+                    xs = [x[:, i:i+1, ...].to(device) for i in range(self.num_streams)]
                 else:
                     raise ValueError("Fusion enabled but data_x is single tensor without stream dimension. Provide list or (N,K,H,W)")
             return xs
         else:
-            x = to_four_d(data_x)
+            x = to_four_d(data_x).to(device)
             return x
 
     def evaluate(self, data, batch_size=64, device="cpu"):
-        """ Evaluate on test split. Computes loss and metrics (accuracy/precision/recall/F1). Returns (avg_loss, metrics_dict). """
         self.eval()
         self.to(device)
 
         x = data.get("x_test_multi", data.get("x_test"))
-        y = torch.as_tensor(data["y_test"], dtype=torch.long)
+        y = torch.as_tensor(data["y_test"], dtype=torch.long).to(device)
 
         if self.fusion:
             xs = self._prepare_inputs(x, device)
@@ -478,15 +479,8 @@ class CNN(nn.Module):
             ds = torch.utils.data.TensorDataset(*(xs + [y]))
         else:
             ds = torch.utils.data.TensorDataset(x, y)
+        dl = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
-        use_cuda = isinstance(device, str) and device.startswith("cuda")
-        num_workers = 0
-        dl = torch.utils.data.DataLoader(
-            ds, batch_size=batch_size, shuffle=False,
-            num_workers=num_workers,
-            pin_memory=use_cuda,
-            persistent_workers=use_cuda and num_workers > 0
-        )
 
         loss_fn = self.loss_fn()
         if hasattr(loss_fn, "weight") and loss_fn.weight is not None:
@@ -501,28 +495,16 @@ class CNN(nn.Module):
             for batch in dl:
                 if self.fusion:
                     *xb_list, yb = batch
-                    xb_list = [xx.to(device, non_blocking=use_cuda).float() for xx in xb_list]
-                    yb = yb.to(device, non_blocking=use_cuda)  # keep as long or will be cast below
-                    with autocast(enabled=use_cuda):
-                        logits = self.forward(xb_list)
-                        # /
-                        if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
-                            yb = yb.unsqueeze(1).float()
-                        elif logits.ndim == 2 and logits.shape[1] > 1:
-                            yb = yb.long()
-                        loss = loss_fn(logits, yb)
+                    logits = self.forward(xb_list)
                 else:
                     xb, yb = batch
-                    xb = xb.to(device, non_blocking=use_cuda).float()
-                    yb = yb.to(device, non_blocking=use_cuda)
-                    with autocast(enabled=use_cuda):
-                        logits = self.forward(xb)
-                        if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
-                            yb = yb.unsqueeze(1).float()
-                        elif logits.ndim == 2 and logits.shape[1] > 1:
-                            yb = yb.long()
-                        loss = loss_fn(logits, yb)
-
+                    logits = self.forward(xb)
+                #  yb  logits 
+                if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
+                    yb = yb.unsqueeze(1).float()
+                elif logits.ndim == 2 and logits.shape[1] > 1:
+                    yb = yb.long()
+                loss = loss_fn(logits, yb)
                 total_loss += loss.item() * yb.size(0)
                 if self.loss_fn().__class__.__name__ == "BCEWithLogitsLoss":
                     probs = torch.sigmoid(logits)
@@ -547,32 +529,29 @@ class CNN(nn.Module):
         metrics = {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
         return avg_loss, metrics
 
+
     def train_model(self, data: Dict[str, Any], batch_size: int = 64, epochs: int = 1,
-                    device: str = "cpu", val_split: float = 0.2) -> None:
+                device: str = "cpu", val_split: float = 0.2):
+
         os.makedirs(os.path.dirname(self.checkpoint_filepath), exist_ok=True)
 
-        # 
+        # ---- ， ----
         if self.load_if_exist and os.path.exists(self.checkpoint_filepath):
             try:
                 state_dict = torch.load(self.checkpoint_filepath, map_location=device)
                 self.load_state_dict(state_dict)
                 self.to(device)
-                return
+                return {
+                    "f1": 0.0, "accuracy": 0.0,
+                    "precision": 0.0, "recall": 0.0
+                }
             except Exception as e:
-                print(f" : {e}")
+                print(f"⚠️ ，: {e}")
 
         self.to(device)
         self.train()
 
-        # ===== CUDA  CUDA  =====
-        is_cuda = isinstance(device, str) and device.startswith("cuda")
-        if is_cuda:
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.set_float32_matmul_precision("high")
-
-        # AMP  CUDA 
-        scaler = GradScaler(enabled=is_cuda)
-
+        # ----  ----
         x = data.get("x_train_multi", data.get("x_train"))
         y = torch.as_tensor(data["y_train"], dtype=torch.long)
 
@@ -583,21 +562,19 @@ class CNN(nn.Module):
             x = self._prepare_inputs(x, device)
             n = x.size(0)
 
-        #    #
-        n_val = int(n * val_split)
-        if n_val <= 0 or n_val >= n:
-            use_val = False
-        else:
-            use_val = True
+        y = y.to(device)
 
-        #  CPU 
-        idx = torch.randperm(n, device="cpu")
+        # ----  ----
+        n_val = int(n * val_split)
+        use_val = (n_val > 0 and n_val < n)
+
+        idx = torch.randperm(n, device=device)
         if use_val:
             val_idx = idx[:n_val]
             train_idx = idx[n_val:]
         else:
-            train_idx = idx
             val_idx = None
+            train_idx = idx
 
         if self.fusion:
             train_ds = torch.utils.data.TensorDataset(*[xx[train_idx] for xx in xs], y[train_idx])
@@ -606,139 +583,133 @@ class CNN(nn.Module):
             train_ds = torch.utils.data.TensorDataset(x[train_idx], y[train_idx])
             val_ds   = None if not use_val else torch.utils.data.TensorDataset(x[val_idx], y[val_idx])
 
-        use_cuda = isinstance(device, str) and device.startswith("cuda")
-        num_workers = 0  #  CPU 
+        train_dl = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
+        val_dl   = None if not use_val else torch.utils.data.DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
-        train_dl = torch.utils.data.DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True,
-            num_workers=num_workers,
-            pin_memory=use_cuda,
-            persistent_workers=use_cuda and num_workers > 0
-        )
-        val_dl = None if not use_val else torch.utils.data.DataLoader(
-            val_ds, batch_size=batch_size, shuffle=False,
-            num_workers=num_workers,
-            pin_memory=use_cuda,
-            persistent_workers=use_cuda and num_workers > 0
-        )
-
+        # ----  ----
         opt = self.optimizer_fn(self.parameters())
         loss_fn = self.loss_fn()
         if hasattr(loss_fn, "weight") and getattr(loss_fn, "weight", None) is not None:
             loss_fn.weight = loss_fn.weight.to(device)
         if hasattr(loss_fn, "pos_weight") and getattr(loss_fn, "pos_weight", None) is not None:
             loss_fn.pos_weight = loss_fn.pos_weight.to(device)
-        best_val_f1 = -1.0
 
-        scaler = GradScaler(enabled=False)
+        # ----  ----
+        best_val_f1   = -1.0
+        best_val_acc  = 0.0
+        best_val_prec = 0.0
+        best_val_rec  = 0.0
+
+        # ===========================
+        #       Training Loop
+        # ===========================
         for epoch in range(epochs):
             self.train()
             running_loss = 0.0
+
             with tqdm(train_dl, desc=f"Epoch {epoch+1}/{epochs}", leave=True) as pbar:
                 for batch in pbar:
-                    opt.zero_grad(set_to_none=True)
-
                     if self.fusion:
                         *xb_list, yb = batch
-                        xb_list = [xx.to(device, non_blocking=use_cuda).float() for xx in xb_list]
-                        yb = yb.to(device, non_blocking=use_cuda)
-                        with autocast(enabled=use_cuda):
-                            logits = self.forward(xb_list)
-                            # 
-                            if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
-                                yb = yb.unsqueeze(1).float()
-                            elif logits.ndim == 2 and logits.shape[1] > 1:
-                                yb = yb.long()
-                            loss = loss_fn(logits, yb)
+                        logits = self.forward(xb_list)
                     else:
                         xb, yb = batch
-                        xb = xb.to(device, non_blocking=use_cuda).float()
-                        yb = yb.to(device, non_blocking=use_cuda)
-                        with autocast(enabled=use_cuda):
-                            logits = self.forward(xb)
-                            if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
-                                yb = yb.unsqueeze(1).float()
-                            elif logits.ndim == 2 and logits.shape[1] > 1:
-                                yb = yb.long()
-                            loss = loss_fn(logits, yb)
+                        logits = self.forward(xb)
 
-                    #  NaN
-                    if not torch.isfinite(loss):
-                        print(" Non-finite loss detected, skipping batch")
-                        continue
+                    # 
+                    if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
+                        yb = yb.unsqueeze(1).float()
+                    elif logits.ndim == 2 and logits.shape[1] > 1:
+                        yb = yb.long()
 
-                    #   backward +  + step
+                    loss = loss_fn(logits, yb)
+                    opt.zero_grad()
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
                     opt.step()
 
                     running_loss += loss.item()
-                    avg_loss = running_loss / (pbar.n + 1)
-                    pbar.set_postfix({"loss": f"{avg_loss:.4f}"})
+                    pbar.set_postfix({"loss": f"{running_loss/(pbar.n+1):.4f}"})
 
-            #    #
+            # ===========================
+            #     Validation
+            # ===========================
             if use_val and val_dl is not None:
                 self.eval()
                 all_preds, all_labels = [], []
+
                 with torch.no_grad():
                     for batch in val_dl:
                         if self.fusion:
                             *xb_list, yb = batch
-                            xb_list = [xx.to(device, non_blocking=use_cuda).float() for xx in xb_list]
-                            yb = yb.to(device, non_blocking=use_cuda)
-                            with autocast(enabled=use_cuda):
-                                logits = self.forward(xb_list)
-                                if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
-                                    yb = yb.unsqueeze(1).float()
-                                elif logits.ndim == 2 and logits.shape[1] > 1:
-                                    yb = yb.long()
-                                loss = loss_fn(logits, yb)
+                            logits = self.forward(xb_list)
                         else:
                             xb, yb = batch
-                            xb = xb.to(device, non_blocking=use_cuda).float()
-                            yb = yb.to(device, non_blocking=use_cuda)
-                            with autocast(enabled=use_cuda):
-                                logits = self.forward(xb)
-                                if logits.ndim == 2 and logits.shape[1] == 1 and yb.ndim == 1:
-                                    yb = yb.unsqueeze(1).float()
-                                elif logits.ndim == 2 and logits.shape[1] > 1:
-                                    yb = yb.long()
-                                loss = loss_fn(logits, yb)
+                            logits = self.forward(xb)
 
                         if self.loss_fn().__class__.__name__ == "BCEWithLogitsLoss":
                             probs = torch.sigmoid(logits)
                             preds = (probs > 0.5).long().squeeze(1)
                         else:
                             preds = logits.argmax(dim=1)
+
                         all_preds.extend(preds.cpu().numpy())
                         all_labels.extend(yb.cpu().numpy())
 
+                # ===  ===
                 if len(all_labels) > 0:
                     num_classes = len(np.unique(all_labels))
                     avg_type = "binary" if num_classes == 2 else "macro"
-                    val_f1 = f1_score(all_labels, all_preds, average=avg_type, zero_division=0)
+
+                    val_acc  = accuracy_score(all_labels, all_preds)
+                    val_prec = precision_score(all_labels, all_preds, average=avg_type, zero_division=0)
+                    val_rec  = recall_score(all_labels, all_preds, average=avg_type, zero_division=0)
+                    val_f1   = f1_score(all_labels, all_preds, average=avg_type, zero_division=0)
+
+                    # ===  ===
                     if val_f1 > best_val_f1:
                         best_val_f1 = val_f1
+                        best_val_acc = val_acc
+                        best_val_prec = val_prec
+                        best_val_rec = val_rec
                         torch.save(self.state_dict(), self.checkpoint_filepath)
 
-        # 
+        # ---- ， ----
         if not os.path.exists(self.checkpoint_filepath):
             torch.save(self.state_dict(), self.checkpoint_filepath)
 
-        # 
+        # ----  ----
         try:
             state_dict = torch.load(self.checkpoint_filepath, map_location=device)
             self.load_state_dict(state_dict)
             self.to(device)
         except RuntimeError as e:
-            print(f" : {e}")
+            print(f"⚠️ : {e}")
+
+        # ---- （ GA fitness） ----
+        if use_val and best_val_f1 >= 0:
+            return {
+                "f1": best_val_f1,
+                "accuracy": best_val_acc,
+                "precision": best_val_prec,
+                "recall": best_val_rec
+            }
+        else:
+            # 、 val 
+            return {
+                "f1": 0.0,
+                "accuracy": 0.0,
+                "precision": 0.0,
+                "recall": 0.0
+            }
+
+
 
     # ---- nn.Module API ----
     def forward(self, x: Union[torch.Tensor, List[torch.Tensor]]) -> torch.Tensor:
         if not self._built:
             raise RuntimeError("Call generate() before forward()")
 
-        # 
+        # （）
         if not self.fusion:
             if isinstance(x, (list, tuple)):
                 x = x[0]
@@ -757,13 +728,13 @@ class CNN(nn.Module):
 
         # ========== Early Fusion ==========
         if pos == "early":
-            #  :  4D
+            # ✅ :  4D
             xs_aligned = []
             for x in xs:
                 if x.ndim == 2:      # (B, L)
-                    x = x.unsqueeze(1).unsqueeze(2)  #  (B, 1, 1, L)
+                    x = x.unsqueeze(1).unsqueeze(2)  # → (B, 1, 1, L)
                 elif x.ndim == 3:    # (B, H, W)
-                    x = x.unsqueeze(1)               #  (B, 1, H, W)
+                    x = x.unsqueeze(1)               # → (B, 1, H, W)
                 xs_aligned.append(x)
 
             if ftype == "add":
@@ -771,6 +742,9 @@ class CNN(nn.Module):
             elif ftype == "concat":
                 fused = _fuse_concat(xs_aligned, dim=1)
             else:
+                if self.att_fuser is None:
+                    # ：，
+                    self.att_fuser = _AttentionFuse(len(xs_aligned))
                 fused = self.att_fuser(xs_aligned)
 
             z = self.features(fused)
@@ -797,6 +771,8 @@ class CNN(nn.Module):
             elif ftype == "concat":
                 fused = _fuse_concat(head_outs, dim=1)
             else:
+                if self.att_fuser is None:
+                    self.att_fuser = _AttentionFuse(len(head_outs))
                 fused = self.att_fuser(head_outs)
             z = self.features(fused)
             z = self.classifier(z)
@@ -811,7 +787,7 @@ class CNN(nn.Module):
                 else:
                     out = head(xx.view(xx.size(0), -1))
                     out = out.unsqueeze(-1).unsqueeze(-1)
-                #  flatten 
+                # ✅ flatten 
                 out = out.view(out.size(0), -1)
                 feats.append(out)
 
@@ -825,6 +801,8 @@ class CNN(nn.Module):
                 if ftype == "add":
                     logits = _fuse_add(logits_list)
                 else:
+                    if self.att_fuser is None:
+                        self.att_fuser = _AttentionFuse(len(logits_list))
                     logits = self.att_fuser(logits_list)
                 if logits.ndim > 2:
                     logits = logits.view(logits.size(0), -1)
@@ -832,7 +810,10 @@ class CNN(nn.Module):
                     logits = logits.view(logits.size(0), -1)
                 return logits
 
+
         raise RuntimeError("Invalid fusion configuration")
+
+
 
     # ---- utilities ----
     def generate_hash(self) -> str:
