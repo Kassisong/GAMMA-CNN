@@ -34,8 +34,17 @@ print(f"Train set: {train_dm.shape[0]} | Test set: {test_dm.shape[0]}")
 
 
 # -----------------------------
-# 2. Build multi-branch dataset (profile + DM + subbands + subints)
+# 2. Build dataset. e.g. 1.single-modal: subband 2.multimodal fusion: profile + DM + subbands + subints)
 # -----------------------------
+
+dataset_SB = {
+    "x_train_multi": train_sb,
+    "y_train": train_y,
+    "x_test_multi":test_sb,
+    "y_test": test_y
+}
+
+
 dataset_multi = {
     "x_train_multi": [train_profile, train_dm, train_sb, train_si],
     "y_train": train_y,
@@ -55,12 +64,28 @@ device = (
     else "cpu"
 )
 
-ga = AutoCNN(
+ga_sb = AutoCNN(
+    population_size=10,
+    maximal_generation_number=10,
+    dataset=dataset_sb,
+    epoch_number=10,
+    batch_size=64,
+    loss_type="bce",             # "ce"/"weighted"/"focal"/"bce"
+    # class_weight=[1.0, train_np_p],
+    fitness_cache='20251114resultsHTRU/fitness_cache_sb42.json',
+    checkpoint_dir='20251114resultsHTRU/checkpoints_sb42',
+    seed = SEED,
+    logger_path="20251114resultsHTRU/single_sb_stats42.json",
+    fusion=False,                # fusion?
+    device=device
+)
+
+ga_4M = AutoCNN(
     population_size=20,
     maximal_generation_number=10,
     dataset=dataset_multi,
     epoch_number=10,
-    batch_size=64,
+    batch_size=32,
     device=device,
     loss_type="bce",           # "ce" / "weighted" / "focal"
     fusion=True,
@@ -71,8 +96,13 @@ ga = AutoCNN(
 # -----------------------------
 # 5. Run Evolution Process
 # -----------------------------
-best_cnn = ga.run()
+best_sb= ga_sb.run()
+print("✅ Evolution completed!")
+print("Best structure:", "-".join(map(str, best_sb.layers)))
+print("Fusion configuration:", getattr(best_cnn_sb, "_fusion_choice", None))
 
+
+best_cnn = ga_4M.run()
 print("✅ Evolution completed!")
 print("Best structure:", "-".join(map(str, best_cnn.layers)))
 print("Fusion configuration:", getattr(best_cnn, "_fusion_choice", None))
