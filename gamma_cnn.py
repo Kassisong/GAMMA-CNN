@@ -498,13 +498,14 @@ class AutoCNN:
 
                     print(f"🧬 Inherited fusion from parent: pos={pos}, type={ftype}")
                     # ---- mutation:  fusion_pos  fusion_type ----
-                    if random.random() < self.mutation_probability:
-                        new_pos = random.choice(["early", "mid", "late"])
-                        new_ftype = random.choice(["add", "concat", "attention"])
-                        cnn._chosen_pos = new_pos
-                        cnn._chosen_ftype = new_ftype
-                        cnn._fusion_choice = (new_pos, new_ftype)
-                        print(f"🧬 Mutation happens: pos={new_pos}, type={new_ftype}")
+                    if pos == "all" and ftype == "mix":
+                        if random.random() < self.mutation_probability:
+                            new_pos = random.choice(["early", "mid", "late"])
+                            new_ftype = random.choice(["add", "concat", "attention"])
+                            cnn._chosen_pos = new_pos
+                            cnn._chosen_ftype = new_ftype
+                            cnn._fusion_choice = (new_pos, new_ftype)
+                            print(f"🧬 Mutation happens: pos={new_pos}, type={new_ftype}")
 
                 else:
                     #  parent  fusion_choice（），
